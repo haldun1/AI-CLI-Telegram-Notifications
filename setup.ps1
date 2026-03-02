@@ -92,21 +92,29 @@ if (-not $ReuseExistingTelegramConfig) {
 if (-not $ReuseExistingTelegramConfig) {
     Write-Host "`nSTEP 2: Connecting to Telegram..." -ForegroundColor Yellow
     Write-Host "Open a chat with your NEW bot in Telegram and send it ANY message (e.g., 'hello')."
-    Write-Host "Waiting for your message..." -ForegroundColor Cyan
+    Write-Host "Waiting for your message (30-second timeout)..." -ForegroundColor Cyan
 
     $Offset = 0
-    $MaxWaitSeconds = 180
+    $MaxWaitSeconds = 30
+    $PollTimeoutSeconds = 2
+    $StartedAt = Get-Date
     $Deadline = (Get-Date).AddSeconds($MaxWaitSeconds)
 
     while ($null -eq $ChatId) {
+        $ElapsedSeconds = [int]((Get-Date) - $StartedAt).TotalSeconds
+        $RemainingSeconds = [Math]::Max(0, $MaxWaitSeconds - $ElapsedSeconds)
+        $PercentComplete = [Math]::Min(100, [int](($ElapsedSeconds * 100) / $MaxWaitSeconds))
+        Write-Progress -Activity "Waiting for Telegram message" -Status "$RemainingSeconds second(s) remaining" -PercentComplete $PercentComplete
+
         if ((Get-Date) -gt $Deadline) {
+            Write-Progress -Activity "Waiting for Telegram message" -Completed
             Write-Host "`nTimed out after $MaxWaitSeconds seconds waiting for a Telegram message." -ForegroundColor Red
             Write-Host "Please send a message to your bot and re-run setup." -ForegroundColor Red
             exit 1
         }
 
         try {
-            $Response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$BotToken/getUpdates?offset=$Offset&timeout=10" -Method Get -ErrorAction Stop
+            $Response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$BotToken/getUpdates?offset=$Offset&timeout=$PollTimeoutSeconds" -Method Get -ErrorAction Stop
             if ($Response.ok -and $Response.result.Count -gt 0) {
                 foreach ($Update in @($Response.result | Sort-Object -Property update_id)) {
                     if ($Update.update_id -ge $Offset) {
@@ -120,15 +128,12 @@ if (-not $ReuseExistingTelegramConfig) {
                 }
             }
         } catch {
+            Write-Progress -Activity "Waiting for Telegram message" -Completed
             Write-Host "Error checking Telegram API. Please ensure your token is correct." -ForegroundColor Red
             exit 1
         }
-
-        if ($null -eq $ChatId) {
-            Write-Host "." -NoNewline
-            Start-Sleep -Milliseconds 800
-        }
     }
+    Write-Progress -Activity "Waiting for Telegram message" -Completed
 
     Write-Host "`nSuccess! Found Chat ID: $ChatId" -ForegroundColor Green
 
