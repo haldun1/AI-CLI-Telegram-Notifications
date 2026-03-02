@@ -19,7 +19,7 @@ This project sends AI responses to Telegram. Treat that as external data transfe
 ## Quick start
 
 ```powershell
-cd E:\_Repos\Experimental\AI-CLI-Telegram-Notifications
+cd path\to\AI-CLI-Telegram-Notifications
 .\setup.ps1
 ```
 
@@ -58,7 +58,7 @@ The wizard will:
    - Claude only
    - Gemini only
 7. Install hook scripts and update tool configs.
-8. Add `tg-off` / `tg-on` to your PowerShell profile.
+8. Add `tg-on` / `tg-off` to your PowerShell profile.
 
 ---
 
@@ -159,13 +159,13 @@ Add hook in `~/.gemini/settings.json`:
 }
 ```
 
-### Step 4: Toggle notifications
+### Step 4: Toggle notifications (default: off)
 
 Add to your PowerShell profile:
 
 ```powershell
-function tg-off { $env:TG_OFF = "1" }
-function tg-on  { Remove-Item Env:TG_OFF -ErrorAction SilentlyContinue }
+function tg-on  { $env:TG_ON = "1" }
+function tg-off { Remove-Item Env:TG_ON -ErrorAction SilentlyContinue }
 ```
 
 Reload profile:
@@ -174,13 +174,16 @@ Reload profile:
 . $PROFILE
 ```
 
+Notifications are OFF by default.  
+`tg-on` only affects the current terminal session. Run `tg-on` and your CLI in the same shell window.
+
 ---
 
 ## Troubleshooting
 
 **No message received**
 - Verify: `$env:TELEGRAM_BOT_TOKEN`, `$env:TELEGRAM_CHAT_ID`
-- Confirm `TG_OFF` is not set
+- Confirm `TG_ON` is set in the current session (`$env:TG_ON`)
 - Confirm you messaged the bot from the same chat ID you configured
 
 **Too-short or too-long messages**
@@ -189,6 +192,10 @@ Reload profile:
 
 **Codex not notifying**
 - Ensure both `notify = ...` and `notifications = ["agent-turn-complete"]` exist in `~/.codex/config.toml`
+
+**`tg-on` not working in Codex**
+- Ensure `~/.codex/config.toml` points to `~/.codex/codex-telegram-notify.ps1` (not an older `telegram-notify.ps1` path)
+- Run `tg-on` in the same terminal session where you start `codex`
 
 ---
 

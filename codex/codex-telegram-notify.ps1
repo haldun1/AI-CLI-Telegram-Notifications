@@ -1,4 +1,4 @@
-if ($env:TG_OFF) { exit 0 }
+if (-not $env:TG_ON) { exit 0 }
 
 $BOT_TOKEN = $env:TELEGRAM_BOT_TOKEN
 $CHAT_ID   = $env:TELEGRAM_CHAT_ID

@@ -50,7 +50,6 @@ Write-Host "Open a chat with your NEW bot in Telegram and send it ANY message (e
 Write-Host "Waiting for your message..." -ForegroundColor Cyan
 
 $ChatId = $null
-$UpdateUrl = "https://api.telegram.org/bot$BotToken/getUpdates"
 $Offset = 0
 $MaxWaitSeconds = 180
 $Deadline = (Get-Date).AddSeconds($MaxWaitSeconds)
@@ -63,7 +62,7 @@ while ($null -eq $ChatId) {
     }
 
     try {
-        $Response = Invoke-RestMethod -Uri "$UpdateUrl?offset=$Offset&timeout=10" -Method Get -ErrorAction Stop
+        $Response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$BotToken/getUpdates?offset=$Offset&timeout=10" -Method Get -ErrorAction Stop
         if ($Response.ok -and $Response.result.Count -gt 0) {
             foreach ($Update in @($Response.result | Sort-Object -Property update_id)) {
                 if ($Update.update_id -ge $Offset) {
@@ -194,8 +193,11 @@ if ($SetupCodex -and (Test-Path $CodexDir)) {
 
     $ConfigContent = Get-Content $CodexConfig -Raw
     $NotifyLine = 'notify = ["powershell", "-File", "' + $CodexDir.Replace('\', '\\') + '\\codex-telegram-notify.ps1"]'
+    $NotifyPattern = '(?m)^notify\s*=\s*\[.*\]\s*$'
 
-    if ($ConfigContent -notmatch "codex-telegram-notify.ps1") {
+    if ($ConfigContent -match $NotifyPattern) {
+        $ConfigContent = [regex]::Replace($ConfigContent, $NotifyPattern, $NotifyLine, 1)
+    } else {
         $ConfigContent = "$NotifyLine`r`n`r`n$ConfigContent"
     }
 
@@ -351,18 +353,31 @@ if (-not $AnyToolDetected) {
 # ---------------------------------------------------------------------------
 # STEP 6: Add Profile Toggles
 # ---------------------------------------------------------------------------
-Write-Host "`nSTEP 6: Adding 'tg-off' and 'tg-on' toggles to PowerShell profile..." -ForegroundColor Yellow
+Write-Host "`nSTEP 6: Adding 'tg-on' and 'tg-off' toggles to PowerShell profile..." -ForegroundColor Yellow
+if (-not (Test-Path (Split-Path -Parent $PROFILE))) {
+    New-Item -Path (Split-Path -Parent $PROFILE) -ItemType Directory -Force | Out-Null
+}
 if (-not (Test-Path $PROFILE)) {
     New-Item -Path $PROFILE -ItemType File -Force | Out-Null
 }
 
 $ProfileContent = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
-if ($ProfileContent -notmatch "function tg-off") {
-    $ToggleCode = "`n# AI-CLI-Telegram-Notifications Toggles`nfunction tg-off { `$env:TG_OFF = `"1`" }`nfunction tg-on  { Remove-Item Env:TG_OFF -ErrorAction SilentlyContinue }`n"
-    Add-Content -Path $PROFILE -Value $ToggleCode
+$ToggleCode = "# AI-CLI-Telegram-Notifications Toggles`nfunction tg-on  { `$env:TG_ON = `"1`" }`nfunction tg-off { Remove-Item Env:TG_ON -ErrorAction SilentlyContinue }"
+$TogglePattern = '(?ms)^# AI-CLI-Telegram-Notifications Toggles\r?\n(?:function\s+tg-(?:on|off)\s*\{[^\r\n]*\}\r?\n?){1,4}'
+
+if ($ProfileContent -match "(?m)^# AI-CLI-Telegram-Notifications Toggles$") {
+    $UpdatedProfile = [regex]::Replace($ProfileContent, $TogglePattern, $ToggleCode, 1)
+    if ($UpdatedProfile -eq $ProfileContent) {
+        $UpdatedProfile = $ProfileContent.TrimEnd() + "`r`n`r`n$ToggleCode`r`n"
+    }
+    Set-Content -Path $PROFILE -Value $UpdatedProfile -Encoding UTF8
+    Write-Host "Toggles updated." -ForegroundColor Green
+} elseif ($ProfileContent -notmatch "(?m)^function tg-on\b" -and $ProfileContent -notmatch "(?m)^function tg-off\b") {
+    Add-Content -Path $PROFILE -Value ("`r`n$ToggleCode`r`n")
     Write-Host "Toggles added." -ForegroundColor Green
 } else {
-    Write-Host "Toggles already exist in profile." -ForegroundColor Gray
+    Add-Content -Path $PROFILE -Value ("`r`n# AI-CLI-Telegram-Notifications Toggles`r`nfunction tg-on  { `$env:TG_ON = `"1`" }`r`nfunction tg-off { Remove-Item Env:TG_ON -ErrorAction SilentlyContinue }`r`n")
+    Write-Host "Toggles added as AI-CLI-Telegram-Notifications block." -ForegroundColor Yellow
 }
 
 Write-Host "`n==================================================" -ForegroundColor Cyan
