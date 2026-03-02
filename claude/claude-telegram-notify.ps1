@@ -2,6 +2,12 @@ if ($env:TG_OFF) { exit 0 }
 
 $BOT_TOKEN = $env:TELEGRAM_BOT_TOKEN
 $CHAT_ID   = $env:TELEGRAM_CHAT_ID
+$SUFFIX = "`n`n[truncated]"
+$MAX_CHARS = 4000
+if ($env:TELEGRAM_MESSAGE_CHAR_LIMIT -match '^\d+$') {
+    $MAX_CHARS = [Math]::Min([int]$env:TELEGRAM_MESSAGE_CHAR_LIMIT, 4096)
+}
+if ($MAX_CHARS -lt 1) { $MAX_CHARS = 1 }
 
 $inputJson = $input | Out-String | ConvertFrom-Json
 $transcript = $inputJson.transcript_path
@@ -23,7 +29,13 @@ if ($transcript -and (Test-Path $transcript)) {
     }
 }
 
-if ($lastMessage.Length -gt 4000) { $lastMessage = $lastMessage.Substring(0, 4000) + "`n`n[truncated]" }
+if ($lastMessage.Length -gt $MAX_CHARS) {
+    $KeepLen = [Math]::Max(0, $MAX_CHARS - $SUFFIX.Length)
+    $lastMessage = $lastMessage.Substring(0, $KeepLen) + $SUFFIX
+}
+if ($lastMessage.Length -gt $MAX_CHARS) {
+    $lastMessage = $lastMessage.Substring(0, $MAX_CHARS)
+}
 
 $body = @{
     chat_id = $CHAT_ID

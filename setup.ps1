@@ -1,0 +1,372 @@
+<#
+.SYNOPSIS
+Automated setup wizard for AI-CLI-Telegram-Notifications.
+
+.DESCRIPTION
+Configures environment variables, automatically fetches Telegram Chat ID,
+installs the notification scripts, and updates config files for Codex, Claude, and Gemini.
+#>
+
+$ErrorActionPreference = "Stop"
+$HomeDir = [System.Environment]::GetFolderPath('UserProfile')
+$HomeDirFS = $HomeDir -replace '\\', '/' # Forward-slash version for JSON configs
+
+function Get-ChatIdFromUpdate {
+    param($Update)
+
+    foreach ($Field in @("message", "edited_message", "channel_post", "edited_channel_post")) {
+        $Message = $Update.$Field
+        if ($null -ne $Message -and $null -ne $Message.chat -and $null -ne $Message.chat.id) {
+            return $Message.chat.id
+        }
+    }
+
+    return $null
+}
+
+Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host " AI CLI Telegram Notifications - Setup Wizard" -ForegroundColor Cyan
+Write-Host "==================================================`n" -ForegroundColor Cyan
+
+# ---------------------------------------------------------------------------
+# STEP 1: Telegram Bot Token
+# ---------------------------------------------------------------------------
+Write-Host "STEP 1: Telegram Bot Token" -ForegroundColor Yellow
+Write-Host "1. Open Telegram and message @BotFather"
+Write-Host "2. Send /newbot and follow the prompts to create a bot"
+Write-Host "3. Copy the HTTP API Token"
+$BotToken = Read-Host "`nPaste your Bot Token here"
+
+if ([string]::IsNullOrWhiteSpace($BotToken)) {
+    Write-Host "Error: Bot Token cannot be empty. Exiting." -ForegroundColor Red
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
+# STEP 2: Automatic Chat ID Retrieval
+# ---------------------------------------------------------------------------
+Write-Host "`nSTEP 2: Connecting to Telegram..." -ForegroundColor Yellow
+Write-Host "Open a chat with your NEW bot in Telegram and send it ANY message (e.g., 'hello')."
+Write-Host "Waiting for your message..." -ForegroundColor Cyan
+
+$ChatId = $null
+$UpdateUrl = "https://api.telegram.org/bot$BotToken/getUpdates"
+$Offset = 0
+$MaxWaitSeconds = 180
+$Deadline = (Get-Date).AddSeconds($MaxWaitSeconds)
+
+while ($null -eq $ChatId) {
+    if ((Get-Date) -gt $Deadline) {
+        Write-Host "`nTimed out after $MaxWaitSeconds seconds waiting for a Telegram message." -ForegroundColor Red
+        Write-Host "Please send a message to your bot and re-run setup." -ForegroundColor Red
+        exit 1
+    }
+
+    try {
+        $Response = Invoke-RestMethod -Uri "$UpdateUrl?offset=$Offset&timeout=10" -Method Get -ErrorAction Stop
+        if ($Response.ok -and $Response.result.Count -gt 0) {
+            foreach ($Update in @($Response.result | Sort-Object -Property update_id)) {
+                if ($Update.update_id -ge $Offset) {
+                    $Offset = $Update.update_id + 1
+                }
+
+                $DetectedChatId = Get-ChatIdFromUpdate -Update $Update
+                if ($null -ne $DetectedChatId) {
+                    $ChatId = $DetectedChatId
+                }
+            }
+        }
+    } catch {
+        Write-Host "Error checking Telegram API. Please ensure your token is correct." -ForegroundColor Red
+        exit 1
+    }
+
+    if ($null -eq $ChatId) {
+        Write-Host "." -NoNewline
+        Start-Sleep -Milliseconds 800
+    }
+}
+
+Write-Host "`nSuccess! Found Chat ID: $ChatId" -ForegroundColor Green
+
+do {
+    $UseDetectedChatId = Read-Host "Use Chat ID '$ChatId'? (Y/n)"
+    if ([string]::IsNullOrWhiteSpace($UseDetectedChatId) -or $UseDetectedChatId -match '^[Yy]$') {
+        $ChatIdConfirmed = $true
+    } elseif ($UseDetectedChatId -match '^[Nn]$') {
+        $ManualChatId = Read-Host "Enter the Chat ID to use (numbers only; may start with '-')"
+        if ($ManualChatId -match '^-?\d+$') {
+            $ChatId = $ManualChatId
+            $ChatIdConfirmed = $true
+            Write-Host "Using manually provided Chat ID: $ChatId" -ForegroundColor Green
+        } else {
+            $ChatIdConfirmed = $false
+            Write-Host "Invalid Chat ID. Please enter only digits, with optional leading '-'." -ForegroundColor Red
+        }
+    } else {
+        $ChatIdConfirmed = $false
+        Write-Host "Please answer with Y or N." -ForegroundColor Red
+    }
+} while (-not $ChatIdConfirmed)
+
+# ---------------------------------------------------------------------------
+# STEP 3: Message Character Limit
+# ---------------------------------------------------------------------------
+Write-Host "`nSTEP 3: Message Character Limit" -ForegroundColor Yellow
+Write-Host "Telegram allows a maximum of 4096 characters per message."
+Write-Host "Default limit is 4000 to leave room for a truncation suffix."
+
+$DefaultCharLimit = 4000
+do {
+    $LimitInput = Read-Host "Press Enter to keep $DefaultCharLimit, or enter a custom limit (1-4096)"
+    if ([string]::IsNullOrWhiteSpace($LimitInput)) {
+        $MessageCharLimit = $DefaultCharLimit
+        $LimitValid = $true
+    } elseif (($LimitInput -match '^\d+$') -and ([int]$LimitInput -ge 1) -and ([int]$LimitInput -le 4096)) {
+        $MessageCharLimit = [int]$LimitInput
+        $LimitValid = $true
+    } else {
+        $LimitValid = $false
+        Write-Host "Invalid value. Enter a number from 1 to 4096." -ForegroundColor Red
+    }
+} while (-not $LimitValid)
+
+Write-Host "Using message character limit: $MessageCharLimit" -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# STEP 4: Set Environment Variables
+# ---------------------------------------------------------------------------
+Write-Host "`nSTEP 4: Saving Environment Variables..." -ForegroundColor Yellow
+[System.Environment]::SetEnvironmentVariable("TELEGRAM_BOT_TOKEN", $BotToken, "User")
+[System.Environment]::SetEnvironmentVariable("TELEGRAM_CHAT_ID", $ChatId, "User")
+[System.Environment]::SetEnvironmentVariable("TELEGRAM_MESSAGE_CHAR_LIMIT", "$MessageCharLimit", "User")
+$env:TELEGRAM_BOT_TOKEN = $BotToken
+$env:TELEGRAM_CHAT_ID = $ChatId
+$env:TELEGRAM_MESSAGE_CHAR_LIMIT = "$MessageCharLimit"
+Write-Host "Variables saved to your Windows User profile." -ForegroundColor Green
+
+# ---------------------------------------------------------------------------
+# STEP 5: Install Scripts and Update Configs
+# ---------------------------------------------------------------------------
+Write-Host "`nSTEP 5: Installing hooks for detected tools..." -ForegroundColor Yellow
+
+$RepoRoot = $PSScriptRoot
+$AnyToolDetected = $false
+
+Write-Host "Choose which CLI tool(s) to configure:" -ForegroundColor Cyan
+Write-Host "  1) All detected tools"
+Write-Host "  2) Codex CLI only"
+Write-Host "  3) Claude Code only"
+Write-Host "  4) Gemini CLI only"
+
+$SelectionMap = @{
+    "1" = "All"
+    "2" = "Codex"
+    "3" = "Claude"
+    "4" = "Gemini"
+}
+
+do {
+    $Choice = Read-Host "Enter 1, 2, 3, or 4"
+    $SelectedTarget = $SelectionMap[$Choice]
+    if (-not $SelectedTarget) {
+        Write-Host "Invalid choice. Please enter 1, 2, 3, or 4." -ForegroundColor Red
+    }
+} while (-not $SelectedTarget)
+
+$SetupCodex = $SelectedTarget -in @("All", "Codex")
+$SetupClaude = $SelectedTarget -in @("All", "Claude")
+$SetupGemini = $SelectedTarget -in @("All", "Gemini")
+
+Write-Host "Selected: $SelectedTarget" -ForegroundColor Green
+
+# --- CODEX CLI ---
+$CodexDir = Join-Path $HomeDir ".codex"
+if ($SetupCodex -and (Test-Path $CodexDir)) {
+    $AnyToolDetected = $true
+    Write-Host "Detected Codex CLI. Installing..." -ForegroundColor Cyan
+    Copy-Item -Path (Join-Path $RepoRoot "codex\codex-telegram-notify.ps1") -Destination $CodexDir -Force
+    
+    $CodexConfig = Join-Path $CodexDir "config.toml"
+    if (-not (Test-Path $CodexConfig)) {
+        Set-Content -Path $CodexConfig -Value "" -Encoding UTF8
+    }
+
+    $ConfigContent = Get-Content $CodexConfig -Raw
+    $NotifyLine = 'notify = ["powershell", "-File", "' + $CodexDir.Replace('\', '\\') + '\\codex-telegram-notify.ps1"]'
+
+    if ($ConfigContent -notmatch "codex-telegram-notify.ps1") {
+        $ConfigContent = "$NotifyLine`r`n`r`n$ConfigContent"
+    }
+
+    $AgentEvent = '"agent-turn-complete"'
+    if ($ConfigContent -notmatch [regex]::Escape($AgentEvent)) {
+        $NotificationsMatch = [regex]::Match($ConfigContent, '(?m)^notifications\s*=\s*\[(?<items>[^\]]*)\]\s*$')
+
+        if ($NotificationsMatch.Success) {
+            $ExistingItems = @(
+                $NotificationsMatch.Groups["items"].Value -split "," |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { $_ -ne "" }
+            )
+            if ($ExistingItems -notcontains $AgentEvent) {
+                $NewItems = @($ExistingItems + $AgentEvent) | Select-Object -Unique
+                $NewLine = "notifications = [$($NewItems -join ', ')]"
+                $ConfigContent = $ConfigContent.Remove($NotificationsMatch.Index, $NotificationsMatch.Length).Insert($NotificationsMatch.Index, $NewLine)
+            }
+        } elseif ($ConfigContent -match '(?m)^\[tui\]\s*$') {
+            $ConfigContent = [regex]::Replace(
+                $ConfigContent,
+                '(?m)^\[tui\]\s*$',
+                "[tui]`r`nnotifications = [$AgentEvent]",
+                1
+            )
+        } else {
+            $ConfigContent = $ConfigContent.TrimEnd() + "`r`n`r`n[tui]`r`nnotifications = [$AgentEvent]`r`n"
+        }
+    }
+
+    Set-Content -Path $CodexConfig -Value $ConfigContent -Encoding UTF8
+    Write-Host "  -> Updated ~/.codex/config.toml" -ForegroundColor Green
+} elseif ($SetupCodex) {
+    Write-Host "Codex CLI selected, but ~/.codex was not found. Skipping Codex setup." -ForegroundColor Yellow
+}
+
+# --- CLAUDE CODE ---
+$ClaudeDir = Join-Path $HomeDir ".claude"
+if ($SetupClaude -and (Test-Path $ClaudeDir)) {
+    $AnyToolDetected = $true
+    Write-Host "Detected Claude Code. Installing..." -ForegroundColor Cyan
+    Copy-Item -Path (Join-Path $RepoRoot "claude\claude-telegram-notify.ps1") -Destination $ClaudeDir -Force
+    
+    $ClaudeConfig = Join-Path $ClaudeDir "settings.json"
+    if (-not (Test-Path $ClaudeConfig)) {
+        Set-Content -Path $ClaudeConfig -Value "{}" -Encoding UTF8
+    }
+
+    $ClaudeRaw = Get-Content $ClaudeConfig -Raw -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($ClaudeRaw)) {
+        $Settings = [pscustomobject]@{}
+    } else {
+        try {
+            $Settings = $ClaudeRaw | ConvertFrom-Json -Depth 10
+        } catch {
+            $BackupPath = "$ClaudeConfig.bak.$((Get-Date).ToString('yyyyMMddHHmmss'))"
+            Copy-Item -Path $ClaudeConfig -Destination $BackupPath -Force
+            Write-Host "  -> Invalid JSON found in ~/.claude/settings.json; backed up to $BackupPath and recreated." -ForegroundColor Yellow
+            $Settings = [pscustomobject]@{}
+        }
+    }
+
+    if ($null -eq $Settings.hooks) { $Settings | Add-Member -MemberType NoteProperty -Name "hooks" -Value ([pscustomobject]@{}) }
+    if ($null -eq $Settings.hooks.Stop) { $Settings.hooks | Add-Member -MemberType NoteProperty -Name "Stop" -Value @() }
+
+    $HookExists = $false
+    foreach ($StopEntry in @($Settings.hooks.Stop)) {
+        foreach ($Hook in @($StopEntry.hooks)) {
+            if ($Hook.command -match "claude-telegram-notify.ps1") {
+                $HookExists = $true
+            }
+        }
+    }
+
+    if (-not $HookExists) {
+        $NewHook = @{
+            matcher = ""
+            hooks = @( @{ type = "command"; command = "powershell -File $HomeDirFS/.claude/claude-telegram-notify.ps1" } )
+        }
+        $Settings.hooks.Stop += $NewHook
+        $Settings | ConvertTo-Json -Depth 10 | Set-Content -Path $ClaudeConfig -Encoding UTF8
+        Write-Host "  -> Updated ~/.claude/settings.json" -ForegroundColor Green
+    } else {
+        Write-Host "  -> Claude config already has the hook." -ForegroundColor Gray
+    }
+} elseif ($SetupClaude) {
+    Write-Host "Claude Code selected, but ~/.claude was not found. Skipping Claude setup." -ForegroundColor Yellow
+}
+
+# --- GEMINI CLI ---
+$GeminiDir = Join-Path $HomeDir ".gemini"
+if ($SetupGemini -and (Test-Path $GeminiDir)) {
+    $AnyToolDetected = $true
+    Write-Host "Detected Gemini CLI. Installing..." -ForegroundColor Cyan
+    Copy-Item -Path (Join-Path $RepoRoot "gemini\gemini-telegram-notify.ps1") -Destination $GeminiDir -Force
+    
+    $GeminiConfig = Join-Path $GeminiDir "settings.json"
+    if (-not (Test-Path $GeminiConfig)) {
+        Set-Content -Path $GeminiConfig -Value "{}" -Encoding UTF8
+    }
+
+    $GeminiRaw = Get-Content $GeminiConfig -Raw -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($GeminiRaw)) {
+        $Settings = [pscustomobject]@{}
+    } else {
+        try {
+            $Settings = $GeminiRaw | ConvertFrom-Json -Depth 10
+        } catch {
+            $BackupPath = "$GeminiConfig.bak.$((Get-Date).ToString('yyyyMMddHHmmss'))"
+            Copy-Item -Path $GeminiConfig -Destination $BackupPath -Force
+            Write-Host "  -> Invalid JSON found in ~/.gemini/settings.json; backed up to $BackupPath and recreated." -ForegroundColor Yellow
+            $Settings = [pscustomobject]@{}
+        }
+    }
+
+    if ($null -eq $Settings.hooks) { $Settings | Add-Member -MemberType NoteProperty -Name "hooks" -Value ([pscustomobject]@{}) }
+    if ($null -eq $Settings.hooks.AfterAgent) { $Settings.hooks | Add-Member -MemberType NoteProperty -Name "AfterAgent" -Value @() }
+
+    $HookExists = $false
+    foreach ($AfterAgentEntry in @($Settings.hooks.AfterAgent)) {
+        foreach ($Hook in @($AfterAgentEntry.hooks)) {
+            if ($Hook.command -match "gemini-telegram-notify.ps1") {
+                $HookExists = $true
+            }
+        }
+    }
+
+    if (-not $HookExists) {
+        $NewHook = @{
+            matcher = ""
+            hooks = @( @{ name = "telegram-notify"; type = "command"; command = "powershell -File $HomeDirFS/.gemini/gemini-telegram-notify.ps1" } )
+        }
+        $Settings.hooks.AfterAgent += $NewHook
+        $Settings | ConvertTo-Json -Depth 10 | Set-Content -Path $GeminiConfig -Encoding UTF8
+        Write-Host "  -> Updated ~/.gemini/settings.json" -ForegroundColor Green
+    } else {
+        Write-Host "  -> Gemini config already has the hook." -ForegroundColor Gray
+    }
+} elseif ($SetupGemini) {
+    Write-Host "Gemini CLI selected, but ~/.gemini was not found. Skipping Gemini setup." -ForegroundColor Yellow
+}
+
+if (-not $AnyToolDetected) {
+    if ($SelectedTarget -eq "All") {
+        Write-Host "No supported CLI config directories were detected (~/.codex, ~/.claude, ~/.gemini)." -ForegroundColor Yellow
+        Write-Host "Install at least one CLI tool, then re-run setup to install hooks automatically." -ForegroundColor Yellow
+    } else {
+        Write-Host "$SelectedTarget was selected, but its config directory was not detected." -ForegroundColor Yellow
+        Write-Host "Install/configure $SelectedTarget first, then re-run setup." -ForegroundColor Yellow
+    }
+}
+
+# ---------------------------------------------------------------------------
+# STEP 6: Add Profile Toggles
+# ---------------------------------------------------------------------------
+Write-Host "`nSTEP 6: Adding 'tg-off' and 'tg-on' toggles to PowerShell profile..." -ForegroundColor Yellow
+if (-not (Test-Path $PROFILE)) {
+    New-Item -Path $PROFILE -ItemType File -Force | Out-Null
+}
+
+$ProfileContent = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
+if ($ProfileContent -notmatch "function tg-off") {
+    $ToggleCode = "`n# AI-CLI-Telegram-Notifications Toggles`nfunction tg-off { `$env:TG_OFF = `"1`" }`nfunction tg-on  { Remove-Item Env:TG_OFF -ErrorAction SilentlyContinue }`n"
+    Add-Content -Path $PROFILE -Value $ToggleCode
+    Write-Host "Toggles added." -ForegroundColor Green
+} else {
+    Write-Host "Toggles already exist in profile." -ForegroundColor Gray
+}
+
+Write-Host "`n==================================================" -ForegroundColor Cyan
+Write-Host " Setup Complete!" -ForegroundColor Green
+Write-Host " Please restart your PowerShell terminal for the"
+Write-Host " profile aliases and environment variables to load."
+Write-Host "==================================================" -ForegroundColor Cyan
