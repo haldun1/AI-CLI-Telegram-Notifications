@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -File C:/Users/YOUR_USERNAME/.claude/claude-telegram-notify.ps1"
+          }
+        ]
+      }
+    ]
+  }
+}

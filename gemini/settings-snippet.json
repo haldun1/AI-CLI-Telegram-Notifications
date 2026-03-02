@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "AfterAgent": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "name": "telegram-notify",
+            "type": "command",
+            "command": "powershell -File C:/Users/YOUR_USERNAME/.gemini/gemini-telegram-notify.ps1"
+          }
+        ]
+      }
+    ]
+  }
+}
