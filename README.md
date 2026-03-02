@@ -1,80 +1,101 @@
 # AI-CLI-Telegram-Notifications
 
-Get a Telegram message on your phone whenever an AI CLI tool finishes responding to your prompt. Walk away from your desk, come back when you're needed.
+Get a Telegram message when an AI CLI finishes responding.
 
 Supports **Codex CLI**, **Claude Code**, and **Gemini CLI** on Windows (PowerShell).
 
 ---
 
-## How it works
+## Privacy and security
 
-Each CLI tool has a hook system that runs a script when the agent finishes a turn. These scripts send a Telegram message with the agent's response so you know exactly what it did — without watching the terminal.
+This project sends AI responses to Telegram. Treat that as external data transfer.
 
----
-
-## Prerequisites
-
-- Windows 11 with PowerShell
-- One of: [Codex CLI](https://github.com/openai/codex), [Claude Code](https://code.claude.com), [Gemini CLI](https://github.com/google-gemini/gemini-cli)
-- A Telegram bot (see setup below)
+- Do not use this on sensitive prompts/responses unless your policy allows sending that content to Telegram.
+- Your bot token is stored as a Windows user environment variable.
+- During setup, always confirm the detected chat ID before saving.
 
 ---
 
-## Step 1: Create a Telegram Bot
+## Quick start
 
-1. Open Telegram and search for **@BotFather**
-2. Send `/newbot` and follow the prompts
-3. Copy the **bot token** it gives you (looks like `123456:ABC-DEF...`)
-4. Start a chat with your new bot, then visit:
+```powershell
+cd E:\_Repos\Experimental\AI-CLI-Telegram-Notifications
+.\setup.ps1
+```
+
+Then follow the prompts:
+1. Paste your bot token
+2. Message your bot once
+3. Confirm or edit detected chat ID
+4. Confirm or set message character limit (max `4096`)
+5. Choose which CLI tool(s) to configure
+
+Restart PowerShell when setup finishes.
+
+---
+
+## Automated setup (recommended)
+
+Run:
+
+```powershell
+.\setup.ps1
+```
+
+The wizard will:
+
+1. Ask for Telegram bot token.
+2. Auto-detect chat ID from Telegram updates.
+3. Ask you to confirm that chat ID, or enter a different one.
+4. Ask you to keep default message limit (`4000`) or set a custom value (`1`-`4096`).
+5. Save:
+   - `TELEGRAM_BOT_TOKEN`
+   - `TELEGRAM_CHAT_ID`
+   - `TELEGRAM_MESSAGE_CHAR_LIMIT`
+6. Let you choose:
+   - All detected tools
+   - Codex only
+   - Claude only
+   - Gemini only
+7. Install hook scripts and update tool configs.
+8. Add `tg-off` / `tg-on` to your PowerShell profile.
+
+---
+
+## Manual setup
+
+Use this if you do not want to run `setup.ps1`.
+
+### Step 1: Create bot and get chat ID
+
+1. Open Telegram and message **@BotFather**
+2. Run `/newbot` and copy your token
+3. Start a chat with your bot and send any message
+4. Open:
    ```
    https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
    ```
-5. Send any message to your bot, refresh the URL, and find your **chat ID** in the response (a number like `8303032448`)
+5. Find your `chat.id`
 
----
-
-## Step 2: Set Environment Variables
-
-Store your credentials as Windows user environment variables so they're never hardcoded in scripts:
+### Step 2: Set environment variables
 
 ```powershell
-[System.Environment]::SetEnvironmentVariable("TELEGRAM_BOT_TOKEN", "your-bot-token-here", "User")
-[System.Environment]::SetEnvironmentVariable("TELEGRAM_CHAT_ID", "your-chat-id-here", "User")
+[System.Environment]::SetEnvironmentVariable("TELEGRAM_BOT_TOKEN", "your-bot-token", "User")
+[System.Environment]::SetEnvironmentVariable("TELEGRAM_CHAT_ID", "your-chat-id", "User")
+[System.Environment]::SetEnvironmentVariable("TELEGRAM_MESSAGE_CHAR_LIMIT", "4000", "User")
 ```
 
-Restart any open PowerShell windows after running these.
+`TELEGRAM_MESSAGE_CHAR_LIMIT` must be between `1` and `4096`.
 
----
+### Step 3: Install scripts and hook config
 
-## Step 3: Choose your tool
-
-### Codex CLI
-
-**Create** `~/.codex/codex-telegram-notify.ps1`:
+#### Codex CLI
 
 ```powershell
-if ($env:TG_OFF) { exit 0 }
-
-$BOT_TOKEN = $env:TELEGRAM_BOT_TOKEN
-$CHAT_ID   = $env:TELEGRAM_CHAT_ID
-
-$payload = $args[-1] | ConvertFrom-Json
-if ($payload.type -ne "agent-turn-complete") { exit 0 }
-
-$response = $payload.'last-assistant-message'
-if (-not $response) { $response = "Task complete." }
-if ($response.Length -gt 4000) { $response = $response.Substring(0, 4000) + "`n`n[truncated]" }
-
-$body = @{
-    chat_id = $CHAT_ID
-    text    = "Codex finished:`n`n$response"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" `
-    -Method Post -Body $body -ContentType "application/json; charset=utf-8"
+Copy-Item .\codex\codex-telegram-notify.ps1 "$HOME\.codex\codex-telegram-notify.ps1" -Force
 ```
 
-**Add to** `~/.codex/config.toml` (must be before any `[section]` headers):
+Add to `~/.codex/config.toml` (before any `[section]` headers):
 
 ```toml
 notify = ["powershell", "-File", "C:\\Users\\YOUR_USERNAME\\.codex\\codex-telegram-notify.ps1"]
@@ -83,50 +104,13 @@ notify = ["powershell", "-File", "C:\\Users\\YOUR_USERNAME\\.codex\\codex-telegr
 notifications = ["agent-turn-complete"]
 ```
 
----
-
-### Claude Code
-
-**Create** `~/.claude/claude-telegram-notify.ps1`:
+#### Claude Code
 
 ```powershell
-if ($env:TG_OFF) { exit 0 }
-
-$BOT_TOKEN = $env:TELEGRAM_BOT_TOKEN
-$CHAT_ID   = $env:TELEGRAM_CHAT_ID
-
-$inputJson = $input | Out-String | ConvertFrom-Json
-$transcript = $inputJson.transcript_path
-
-$lastMessage = "Task complete."
-if ($transcript -and (Test-Path $transcript)) {
-    $lines = Get-Content $transcript | Where-Object { $_ -ne "" }
-    foreach ($line in $lines) {
-        try {
-            $entry = $line | ConvertFrom-Json
-            if ($entry.type -eq "assistant") {
-                $content = $entry.message.content
-                if ($content -is [array]) {
-                    $text = ($content | Where-Object { $_.type -eq "text" } | Select-Object -Last 1).text
-                    if ($text) { $lastMessage = $text }
-                }
-            }
-        } catch {}
-    }
-}
-
-if ($lastMessage.Length -gt 4000) { $lastMessage = $lastMessage.Substring(0, 4000) + "`n`n[truncated]" }
-
-$body = @{
-    chat_id = $CHAT_ID
-    text    = "Claude Code finished:`n`n$lastMessage"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" `
-    -Method Post -Body $body -ContentType "application/json; charset=utf-8"
+Copy-Item .\claude\claude-telegram-notify.ps1 "$HOME\.claude\claude-telegram-notify.ps1" -Force
 ```
 
-**Update** `~/.claude/settings.json` — add the `hooks` block to your existing file:
+Add hook in `~/.claude/settings.json`:
 
 ```json
 {
@@ -146,36 +130,15 @@ Invoke-RestMethod -Uri "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" `
 }
 ```
 
-> **Note:** Use forward slashes (`/`) in the command path, not backslashes. Claude Code strips backslashes.
+Use forward slashes (`/`) in Claude command paths.
 
----
-
-### Gemini CLI
-
-**Create** `~/.gemini/gemini-telegram-notify.ps1`:
+#### Gemini CLI
 
 ```powershell
-if ($env:TG_OFF) { exit 0 }
-
-$BOT_TOKEN = $env:TELEGRAM_BOT_TOKEN
-$CHAT_ID   = $env:TELEGRAM_CHAT_ID
-
-$inputJson = $input | Out-String | ConvertFrom-Json
-$response  = $inputJson.prompt_response
-
-if (-not $response) { $response = "Task complete." }
-if ($response.Length -gt 4000) { $response = $response.Substring(0, 4000) + "`n`n[truncated]" }
-
-$body = @{
-    chat_id = $CHAT_ID
-    text    = "Gemini finished:`n`n$response"
-} | ConvertTo-Json
-
-Invoke-RestMethod -Uri "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" `
-    -Method Post -Body $body -ContentType "application/json; charset=utf-8"
+Copy-Item .\gemini\gemini-telegram-notify.ps1 "$HOME\.gemini\gemini-telegram-notify.ps1" -Force
 ```
 
-**Update** `~/.gemini/settings.json` — add the `hooks` block to your existing file:
+Add hook in `~/.gemini/settings.json`:
 
 ```json
 {
@@ -196,76 +159,39 @@ Invoke-RestMethod -Uri "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" `
 }
 ```
 
----
+### Step 4: Toggle notifications
 
-## Step 4: Toggle notifications on/off
+Add to your PowerShell profile:
 
-Add these functions to your PowerShell profile so you can quickly pause notifications when you don't need them.
-
-Open your profile:
-```powershell
-notepad $PROFILE
-```
-
-If the file doesn't exist, create it first:
-```powershell
-New-Item -Path $PROFILE -ItemType File -Force
-```
-
-Add these lines:
 ```powershell
 function tg-off { $env:TG_OFF = "1" }
 function tg-on  { Remove-Item Env:TG_OFF -ErrorAction SilentlyContinue }
 ```
 
-Reload the profile:
+Reload profile:
+
 ```powershell
 . $PROFILE
 ```
-
-Now you can type `tg-off` or `tg-on` in any terminal. The toggle is session-scoped — opening a new terminal automatically re-enables notifications.
-
-To check current status:
-```powershell
-$env:TG_OFF   # prints "1" if off, nothing if on
-```
-
----
-
-## What each tool sends you
-
-| Tool | Response included | Source |
-|------|-----------------|--------|
-| Codex CLI | ✅ Full response | `last-assistant-message` in hook payload |
-| Claude Code | ✅ Full response | Read from session transcript JSONL |
-| Gemini CLI | ✅ Full response | `prompt_response` in hook payload |
 
 ---
 
 ## Troubleshooting
 
-**No message received:**
-- Check that your bot token and chat ID env vars are set: `$env:TELEGRAM_BOT_TOKEN`
-- Make sure you've started a conversation with your bot in Telegram
-- Check that `TG_OFF` isn't set: `$env:TG_OFF`
+**No message received**
+- Verify: `$env:TELEGRAM_BOT_TOKEN`, `$env:TELEGRAM_CHAT_ID`
+- Confirm `TG_OFF` is not set
+- Confirm you messaged the bot from the same chat ID you configured
 
-**Claude Code: "argument does not exist" error:**
-- Use forward slashes in the path in `settings.json`, not backslashes
+**Too-short or too-long messages**
+- Check `$env:TELEGRAM_MESSAGE_CHAR_LIMIT`
+- Allowed range is `1` to `4096`
 
-**Codex: notify line not working:**
-- The `notify =` line must appear before any `[section]` headers in `config.toml`
-
-**Messages show "Task complete." instead of the response:**
-- Add debug logging to the script to inspect the raw payload (see the `notify-debug.log` approach in the scripts)
-
-**Emoji showing as garbled text:**
-- Make sure you're using `ConvertTo-Json` + `-ContentType "application/json; charset=utf-8"` when calling the Telegram API
+**Codex not notifying**
+- Ensure both `notify = ...` and `notifications = ["agent-turn-complete"]` exist in `~/.codex/config.toml`
 
 ---
 
 ## Contributing
 
-PRs welcome! Especially interested in:
-- macOS / Linux bash equivalents
-- Support for other CLI tools with hook systems
-- Other notification platforms (Slack, Discord, etc.)
+PRs are welcome.

@@ -16,11 +16,18 @@ We are especially interested in Pull Requests that add:
    git checkout -b your-feature-name
    ```
 3. **Write your script**: If adding support for a new CLI or OS, please keep the script formatting as close to the existing scripts as possible. Make sure you use environment variables (e.g., `$env:TELEGRAM_BOT_TOKEN`, `$BOT_TOKEN`) and never hardcode secrets.
-4. **Update the README:** Add a step-by-step section explaining how to integrate your script with the tool, following the format of existing tools. Ensure file references use placeholders properly (e.g. `YOUR_USERNAME`).
-5. **Add snippet files:** Create `settings-snippet.json` or `config-snippet.toml` in your tool's folder to make copying the configuration easy for users.
-6. **Test your code:** Verify that your scripts correctly parse the hooks/logs and format the message cleanly for the notification API you are targeting. Ensure that truncation logic exists for messages over the standard character limit (e.g., 4000 for Telegram).
-7. **Commit** your changes with clear messages.
-8. **Push** your branch and open a **Pull Request** against the `main` branch.
+4. **Update automated setup (`setup.ps1`)**: If your change affects hook installation/configuration, update `setup.ps1` so automated setup also supports it (including tool-selection behavior where applicable).
+5. **Update the README:** Keep both setup paths current:
+   - **Automated setup** (`.\setup.ps1`)
+   - **Manual setup** (step-by-step)
+   Ensure file references use placeholders properly (e.g. `YOUR_USERNAME`).
+6. **Add snippet files:** Create `settings-snippet.json` or `config-snippet.toml` in your tool's folder to make copying the configuration easy for users.
+7. **Test your code:** Verify scripts correctly parse hooks/logs and format messages cleanly for the notification API. Ensure truncation logic exists for long messages (e.g., 4000 chars for Telegram).
+8. **Validate setup flows:**
+   - Run `.\setup.ps1` and confirm selected tool(s) are configured correctly.
+   - Confirm the corresponding manual setup steps still work.
+9. **Commit** your changes with clear messages.
+10. **Push** your branch and open a **Pull Request** against the `main` branch.
 
 ## Submitting Issues
 If you find a bug or have a suggestion, please check if an issue already exists. If not, open a new issue describing:
