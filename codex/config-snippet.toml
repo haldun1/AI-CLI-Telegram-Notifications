@@ -1,4 +1,4 @@
-notify = ["powershell", "-File", "C:\\Users\\YOUR_USERNAME\\.codex\\codex-telegram-notify.ps1"]
+notify = ["powershell", "-ExecutionPolicy", "Bypass", "-File", "C:\\Users\\YOUR_USERNAME\\.codex\\codex-telegram-notify.ps1"]
 
 [tui]
 notifications = ["agent-turn-complete"]

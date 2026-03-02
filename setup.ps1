@@ -24,89 +24,134 @@ function Get-ChatIdFromUpdate {
     return $null
 }
 
+function Write-JsonFile {
+    param(
+        [Parameter(Mandatory = $true)] [string]$Path,
+        [Parameter(Mandatory = $true)] $Object,
+        [int]$Depth = 10
+    )
+
+    $json = $Object | ConvertTo-Json -Depth $Depth
+    # Normalize overly padded colon spacing from Windows PowerShell JSON output.
+    $json = $json -replace '":\s{2,}', '": '
+    Set-Content -Path $Path -Value $json -Encoding UTF8
+}
+
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host " AI CLI Telegram Notifications - Setup Wizard" -ForegroundColor Cyan
 Write-Host "==================================================`n" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
+# STEP 0: Reuse Existing Telegram Environment Variables
+# ---------------------------------------------------------------------------
+$BotToken = $null
+$ChatId = $null
+$ExistingBotToken = [System.Environment]::GetEnvironmentVariable("TELEGRAM_BOT_TOKEN", "User")
+$ExistingChatId = [System.Environment]::GetEnvironmentVariable("TELEGRAM_CHAT_ID", "User")
+$ReuseExistingTelegramConfig = $false
+
+if (-not [string]::IsNullOrWhiteSpace($ExistingBotToken) -and -not [string]::IsNullOrWhiteSpace($ExistingChatId)) {
+    Write-Host "STEP 0: Existing Telegram configuration detected" -ForegroundColor Yellow
+    Write-Host "Found TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in your user environment."
+    do {
+        $ReuseInput = Read-Host "Reuse existing token and chat ID and skip manual entry? (Y/n)"
+        if ([string]::IsNullOrWhiteSpace($ReuseInput) -or $ReuseInput -match '^[Yy]$') {
+            $ReuseExistingTelegramConfig = $true
+            $BotToken = $ExistingBotToken
+            $ChatId = $ExistingChatId
+            Write-Host "Reusing existing TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID." -ForegroundColor Green
+            break
+        } elseif ($ReuseInput -match '^[Nn]$') {
+            $ReuseExistingTelegramConfig = $false
+            break
+        } else {
+            Write-Host "Please answer with Y or N." -ForegroundColor Red
+        }
+    } while ($true)
+}
+
+# ---------------------------------------------------------------------------
 # STEP 1: Telegram Bot Token
 # ---------------------------------------------------------------------------
-Write-Host "STEP 1: Telegram Bot Token" -ForegroundColor Yellow
-Write-Host "1. Open Telegram and message @BotFather"
-Write-Host "2. Send /newbot and follow the prompts to create a bot"
-Write-Host "3. Copy the HTTP API Token"
-$BotToken = Read-Host "`nPaste your Bot Token here"
+if (-not $ReuseExistingTelegramConfig) {
+    Write-Host "STEP 1: Telegram Bot Token" -ForegroundColor Yellow
+    Write-Host "1. Open Telegram and message @BotFather"
+    Write-Host "2. Send /newbot and follow the prompts to create a bot"
+    Write-Host "3. Copy the HTTP API Token"
+    $BotToken = Read-Host "`nPaste your Bot Token here"
 
-if ([string]::IsNullOrWhiteSpace($BotToken)) {
-    Write-Host "Error: Bot Token cannot be empty. Exiting." -ForegroundColor Red
-    exit 1
+    if ([string]::IsNullOrWhiteSpace($BotToken)) {
+        Write-Host "Error: Bot Token cannot be empty. Exiting." -ForegroundColor Red
+        exit 1
+    }
 }
 
 # ---------------------------------------------------------------------------
 # STEP 2: Automatic Chat ID Retrieval
 # ---------------------------------------------------------------------------
-Write-Host "`nSTEP 2: Connecting to Telegram..." -ForegroundColor Yellow
-Write-Host "Open a chat with your NEW bot in Telegram and send it ANY message (e.g., 'hello')."
-Write-Host "Waiting for your message..." -ForegroundColor Cyan
+if (-not $ReuseExistingTelegramConfig) {
+    Write-Host "`nSTEP 2: Connecting to Telegram..." -ForegroundColor Yellow
+    Write-Host "Open a chat with your NEW bot in Telegram and send it ANY message (e.g., 'hello')."
+    Write-Host "Waiting for your message..." -ForegroundColor Cyan
 
-$ChatId = $null
-$Offset = 0
-$MaxWaitSeconds = 180
-$Deadline = (Get-Date).AddSeconds($MaxWaitSeconds)
+    $Offset = 0
+    $MaxWaitSeconds = 180
+    $Deadline = (Get-Date).AddSeconds($MaxWaitSeconds)
 
-while ($null -eq $ChatId) {
-    if ((Get-Date) -gt $Deadline) {
-        Write-Host "`nTimed out after $MaxWaitSeconds seconds waiting for a Telegram message." -ForegroundColor Red
-        Write-Host "Please send a message to your bot and re-run setup." -ForegroundColor Red
-        exit 1
-    }
+    while ($null -eq $ChatId) {
+        if ((Get-Date) -gt $Deadline) {
+            Write-Host "`nTimed out after $MaxWaitSeconds seconds waiting for a Telegram message." -ForegroundColor Red
+            Write-Host "Please send a message to your bot and re-run setup." -ForegroundColor Red
+            exit 1
+        }
 
-    try {
-        $Response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$BotToken/getUpdates?offset=$Offset&timeout=10" -Method Get -ErrorAction Stop
-        if ($Response.ok -and $Response.result.Count -gt 0) {
-            foreach ($Update in @($Response.result | Sort-Object -Property update_id)) {
-                if ($Update.update_id -ge $Offset) {
-                    $Offset = $Update.update_id + 1
-                }
+        try {
+            $Response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$BotToken/getUpdates?offset=$Offset&timeout=10" -Method Get -ErrorAction Stop
+            if ($Response.ok -and $Response.result.Count -gt 0) {
+                foreach ($Update in @($Response.result | Sort-Object -Property update_id)) {
+                    if ($Update.update_id -ge $Offset) {
+                        $Offset = $Update.update_id + 1
+                    }
 
-                $DetectedChatId = Get-ChatIdFromUpdate -Update $Update
-                if ($null -ne $DetectedChatId) {
-                    $ChatId = $DetectedChatId
+                    $DetectedChatId = Get-ChatIdFromUpdate -Update $Update
+                    if ($null -ne $DetectedChatId) {
+                        $ChatId = $DetectedChatId
+                    }
                 }
             }
+        } catch {
+            Write-Host "Error checking Telegram API. Please ensure your token is correct." -ForegroundColor Red
+            exit 1
         }
-    } catch {
-        Write-Host "Error checking Telegram API. Please ensure your token is correct." -ForegroundColor Red
-        exit 1
+
+        if ($null -eq $ChatId) {
+            Write-Host "." -NoNewline
+            Start-Sleep -Milliseconds 800
+        }
     }
 
-    if ($null -eq $ChatId) {
-        Write-Host "." -NoNewline
-        Start-Sleep -Milliseconds 800
-    }
-}
+    Write-Host "`nSuccess! Found Chat ID: $ChatId" -ForegroundColor Green
 
-Write-Host "`nSuccess! Found Chat ID: $ChatId" -ForegroundColor Green
-
-do {
-    $UseDetectedChatId = Read-Host "Use Chat ID '$ChatId'? (Y/n)"
-    if ([string]::IsNullOrWhiteSpace($UseDetectedChatId) -or $UseDetectedChatId -match '^[Yy]$') {
-        $ChatIdConfirmed = $true
-    } elseif ($UseDetectedChatId -match '^[Nn]$') {
-        $ManualChatId = Read-Host "Enter the Chat ID to use (numbers only; may start with '-')"
-        if ($ManualChatId -match '^-?\d+$') {
-            $ChatId = $ManualChatId
+    do {
+        $UseDetectedChatId = Read-Host "Use Chat ID '$ChatId'? (Y/n)"
+        if ([string]::IsNullOrWhiteSpace($UseDetectedChatId) -or $UseDetectedChatId -match '^[Yy]$') {
             $ChatIdConfirmed = $true
-            Write-Host "Using manually provided Chat ID: $ChatId" -ForegroundColor Green
+        } elseif ($UseDetectedChatId -match '^[Nn]$') {
+            $ManualChatId = Read-Host "Enter the Chat ID to use (numbers only; may start with '-')"
+            if ($ManualChatId -match '^-?\d+$') {
+                $ChatId = $ManualChatId
+                $ChatIdConfirmed = $true
+                Write-Host "Using manually provided Chat ID: $ChatId" -ForegroundColor Green
+            } else {
+                $ChatIdConfirmed = $false
+                Write-Host "Invalid Chat ID. Please enter only digits, with optional leading '-'." -ForegroundColor Red
+            }
         } else {
             $ChatIdConfirmed = $false
-            Write-Host "Invalid Chat ID. Please enter only digits, with optional leading '-'." -ForegroundColor Red
+            Write-Host "Please answer with Y or N." -ForegroundColor Red
         }
-    } else {
-        $ChatIdConfirmed = $false
-        Write-Host "Please answer with Y or N." -ForegroundColor Red
-    }
-} while (-not $ChatIdConfirmed)
+    } while (-not $ChatIdConfirmed)
+}
 
 # ---------------------------------------------------------------------------
 # STEP 3: Message Character Limit
@@ -192,7 +237,7 @@ if ($SetupCodex -and (Test-Path $CodexDir)) {
     }
 
     $ConfigContent = Get-Content $CodexConfig -Raw
-    $NotifyLine = 'notify = ["powershell", "-File", "' + $CodexDir.Replace('\', '\\') + '\\codex-telegram-notify.ps1"]'
+    $NotifyLine = 'notify = ["powershell", "-ExecutionPolicy", "Bypass", "-File", "' + $CodexDir.Replace('\', '\\') + '\\codex-telegram-notify.ps1"]'
     $NotifyPattern = '(?m)^notify\s*=\s*\[.*\]\s*$'
 
     if ($ConfigContent -match $NotifyPattern) {
@@ -251,7 +296,7 @@ if ($SetupClaude -and (Test-Path $ClaudeDir)) {
         $Settings = [pscustomobject]@{}
     } else {
         try {
-            $Settings = $ClaudeRaw | ConvertFrom-Json -Depth 10
+            $Settings = $ClaudeRaw | ConvertFrom-Json
         } catch {
             $BackupPath = "$ClaudeConfig.bak.$((Get-Date).ToString('yyyyMMddHHmmss'))"
             Copy-Item -Path $ClaudeConfig -Destination $BackupPath -Force
@@ -263,11 +308,17 @@ if ($SetupClaude -and (Test-Path $ClaudeDir)) {
     if ($null -eq $Settings.hooks) { $Settings | Add-Member -MemberType NoteProperty -Name "hooks" -Value ([pscustomobject]@{}) }
     if ($null -eq $Settings.hooks.Stop) { $Settings.hooks | Add-Member -MemberType NoteProperty -Name "Stop" -Value @() }
 
+    $ExpectedClaudeCommand = "powershell -ExecutionPolicy Bypass -File $HomeDirFS/.claude/claude-telegram-notify.ps1"
     $HookExists = $false
+    $HookUpdated = $false
     foreach ($StopEntry in @($Settings.hooks.Stop)) {
         foreach ($Hook in @($StopEntry.hooks)) {
             if ($Hook.command -match "claude-telegram-notify.ps1") {
                 $HookExists = $true
+                if ($Hook.command -ne $ExpectedClaudeCommand) {
+                    $Hook.command = $ExpectedClaudeCommand
+                    $HookUpdated = $true
+                }
             }
         }
     }
@@ -275,10 +326,14 @@ if ($SetupClaude -and (Test-Path $ClaudeDir)) {
     if (-not $HookExists) {
         $NewHook = @{
             matcher = ""
-            hooks = @( @{ type = "command"; command = "powershell -File $HomeDirFS/.claude/claude-telegram-notify.ps1" } )
+            hooks = @( @{ type = "command"; command = $ExpectedClaudeCommand } )
         }
         $Settings.hooks.Stop += $NewHook
-        $Settings | ConvertTo-Json -Depth 10 | Set-Content -Path $ClaudeConfig -Encoding UTF8
+        $HookUpdated = $true
+    }
+
+    if ($HookUpdated) {
+        Write-JsonFile -Path $ClaudeConfig -Object $Settings -Depth 10
         Write-Host "  -> Updated ~/.claude/settings.json" -ForegroundColor Green
     } else {
         Write-Host "  -> Claude config already has the hook." -ForegroundColor Gray
@@ -304,7 +359,7 @@ if ($SetupGemini -and (Test-Path $GeminiDir)) {
         $Settings = [pscustomobject]@{}
     } else {
         try {
-            $Settings = $GeminiRaw | ConvertFrom-Json -Depth 10
+            $Settings = $GeminiRaw | ConvertFrom-Json
         } catch {
             $BackupPath = "$GeminiConfig.bak.$((Get-Date).ToString('yyyyMMddHHmmss'))"
             Copy-Item -Path $GeminiConfig -Destination $BackupPath -Force
@@ -316,11 +371,17 @@ if ($SetupGemini -and (Test-Path $GeminiDir)) {
     if ($null -eq $Settings.hooks) { $Settings | Add-Member -MemberType NoteProperty -Name "hooks" -Value ([pscustomobject]@{}) }
     if ($null -eq $Settings.hooks.AfterAgent) { $Settings.hooks | Add-Member -MemberType NoteProperty -Name "AfterAgent" -Value @() }
 
+    $ExpectedGeminiCommand = "powershell -ExecutionPolicy Bypass -File $HomeDirFS/.gemini/gemini-telegram-notify.ps1"
     $HookExists = $false
+    $HookUpdated = $false
     foreach ($AfterAgentEntry in @($Settings.hooks.AfterAgent)) {
         foreach ($Hook in @($AfterAgentEntry.hooks)) {
             if ($Hook.command -match "gemini-telegram-notify.ps1") {
                 $HookExists = $true
+                if ($Hook.command -ne $ExpectedGeminiCommand) {
+                    $Hook.command = $ExpectedGeminiCommand
+                    $HookUpdated = $true
+                }
             }
         }
     }
@@ -328,10 +389,14 @@ if ($SetupGemini -and (Test-Path $GeminiDir)) {
     if (-not $HookExists) {
         $NewHook = @{
             matcher = ""
-            hooks = @( @{ name = "telegram-notify"; type = "command"; command = "powershell -File $HomeDirFS/.gemini/gemini-telegram-notify.ps1" } )
+            hooks = @( @{ name = "telegram-notify"; type = "command"; command = $ExpectedGeminiCommand } )
         }
         $Settings.hooks.AfterAgent += $NewHook
-        $Settings | ConvertTo-Json -Depth 10 | Set-Content -Path $GeminiConfig -Encoding UTF8
+        $HookUpdated = $true
+    }
+
+    if ($HookUpdated) {
+        Write-JsonFile -Path $GeminiConfig -Object $Settings -Depth 10
         Write-Host "  -> Updated ~/.gemini/settings.json" -ForegroundColor Green
     } else {
         Write-Host "  -> Gemini config already has the hook." -ForegroundColor Gray

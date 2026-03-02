@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -File C:/Users/YOUR_USERNAME/.claude/claude-telegram-notify.ps1"
+            "command": "powershell -ExecutionPolicy Bypass -File C:/Users/YOUR_USERNAME/.claude/claude-telegram-notify.ps1"
           }
         ]
       }

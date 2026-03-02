@@ -7,7 +7,7 @@
           {
             "name": "telegram-notify",
             "type": "command",
-            "command": "powershell -File C:/Users/YOUR_USERNAME/.gemini/gemini-telegram-notify.ps1"
+            "command": "powershell -ExecutionPolicy Bypass -File C:/Users/YOUR_USERNAME/.gemini/gemini-telegram-notify.ps1"
           }
         ]
       }

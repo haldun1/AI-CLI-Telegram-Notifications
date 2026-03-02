@@ -24,11 +24,12 @@ cd path\to\AI-CLI-Telegram-Notifications
 ```
 
 Then follow the prompts:
-1. Paste your bot token
-2. Message your bot once
-3. Confirm or edit detected chat ID
-4. Confirm or set message character limit (max `4096`)
-5. Choose which CLI tool(s) to configure
+1. Reuse existing Telegram env vars (if found), or continue with manual entry
+2. Paste your bot token (if not reusing)
+3. Message your bot once (if not reusing)
+4. Confirm or edit detected chat ID (if not reusing)
+5. Confirm or set message character limit (max `4096`)
+6. Choose which CLI tool(s) to configure
 
 Restart PowerShell when setup finishes.
 
@@ -45,20 +46,40 @@ Run:
 The wizard will:
 
 1. Ask for Telegram bot token.
-2. Auto-detect chat ID from Telegram updates.
-3. Ask you to confirm that chat ID, or enter a different one.
-4. Ask you to keep default message limit (`4000`) or set a custom value (`1`-`4096`).
-5. Save:
+2. If `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` already exist, offer to reuse them and skip manual entry.
+3. Auto-detect chat ID from Telegram updates (if not reusing existing vars).
+4. Ask you to confirm that chat ID, or enter a different one.
+5. Ask you to keep default message limit (`4000`) or set a custom value (`1`-`4096`).
+6. Save:
    - `TELEGRAM_BOT_TOKEN`
    - `TELEGRAM_CHAT_ID`
    - `TELEGRAM_MESSAGE_CHAR_LIMIT`
-6. Let you choose:
+7. Let you choose:
    - All detected tools
    - Codex only
    - Claude only
    - Gemini only
-7. Install hook scripts and update tool configs.
-8. Add `tg-on` / `tg-off` to your PowerShell profile.
+8. Install hook scripts and update tool configs.
+9. Add `tg-on` / `tg-off` to your PowerShell profile.
+
+---
+
+## Uninstall
+
+Run:
+
+```powershell
+.\uninstall.ps1
+```
+
+The wizard lets you choose what to remove:
+
+1. Hook/config entries (Codex/Claude/Gemini)
+2. Installed notifier script files
+3. `tg-on` / `tg-off` profile toggles
+4. Telegram environment variables (`TELEGRAM_*`)
+
+When config files are edited, a timestamped `.bak` backup is created first.
 
 ---
 
@@ -98,7 +119,7 @@ Copy-Item .\codex\codex-telegram-notify.ps1 "$HOME\.codex\codex-telegram-notify.
 Add to `~/.codex/config.toml` (before any `[section]` headers):
 
 ```toml
-notify = ["powershell", "-File", "C:\\Users\\YOUR_USERNAME\\.codex\\codex-telegram-notify.ps1"]
+notify = ["powershell", "-ExecutionPolicy", "Bypass", "-File", "C:\\Users\\YOUR_USERNAME\\.codex\\codex-telegram-notify.ps1"]
 
 [tui]
 notifications = ["agent-turn-complete"]
@@ -121,7 +142,7 @@ Add hook in `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -File C:/Users/YOUR_USERNAME/.claude/claude-telegram-notify.ps1"
+            "command": "powershell -ExecutionPolicy Bypass -File C:/Users/YOUR_USERNAME/.claude/claude-telegram-notify.ps1"
           }
         ]
       }
@@ -150,7 +171,7 @@ Add hook in `~/.gemini/settings.json`:
           {
             "name": "telegram-notify",
             "type": "command",
-            "command": "powershell -File C:/Users/YOUR_USERNAME/.gemini/gemini-telegram-notify.ps1"
+            "command": "powershell -ExecutionPolicy Bypass -File C:/Users/YOUR_USERNAME/.gemini/gemini-telegram-notify.ps1"
           }
         ]
       }
@@ -185,6 +206,7 @@ Notifications are OFF by default.
 - Verify: `$env:TELEGRAM_BOT_TOKEN`, `$env:TELEGRAM_CHAT_ID`
 - Confirm `TG_ON` is set in the current session (`$env:TG_ON`)
 - Confirm you messaged the bot from the same chat ID you configured
+- Ensure hook commands include `-ExecutionPolicy Bypass` before `-File`
 
 **Too-short or too-long messages**
 - Check `$env:TELEGRAM_MESSAGE_CHAR_LIMIT`
