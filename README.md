@@ -16,6 +16,17 @@ This project sends AI responses to Telegram. Treat that as external data transfe
 
 ---
 
+## Using after setup
+
+1. Open a new PowerShell session (setup added profile helpers there).
+2. Enable notifications for the current shell: `tg-on`.
+3. Run your CLI normally (Codex/Claude/Gemini). Each turn completion sends the reply to Telegram, trimmed to your configured limit.
+4. To silence notifications in that shell, run `tg-off` or close the window.
+
+`tg-on`/`tg-off` do not persist across sessions; repeat `tg-on` whenever you want Telegram alerts.
+
+---
+
 ## Quick start
 
 ```powershell
